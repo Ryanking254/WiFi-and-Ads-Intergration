@@ -5,8 +5,14 @@ import { v4 as uuid } from 'uuid';
 import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Create data directory if it doesn't exist
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 const app = express();
 const db = new Database(path.join(__dirname, 'data/dsp.db'));
 
