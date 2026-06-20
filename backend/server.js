@@ -17,7 +17,12 @@ const app = express();
 const db = new Database(path.join(__dirname, "data/dsp.db"));
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-advertiser-id'],
+  credentials: false
+}));
 app.use(express.json());
 
 // Simulated auth middleware (for demo - replace with real JWT in production)
