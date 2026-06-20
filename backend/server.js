@@ -14,7 +14,7 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 const app = express();
-const db = new Database(path.join(__dirname, "data/dsp.db"));
+const db = new DatabaseSync(path.join(__dirname, "data/dsp.db"));
 
 // Middleware
 app.use(cors({
