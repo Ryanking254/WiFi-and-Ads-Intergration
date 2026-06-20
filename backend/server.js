@@ -18,13 +18,10 @@ const db = new DatabaseSync(path.join(__dirname, "data/dsp.db"));
 
 // Middleware
 app.use(cors({
-  origin: [
-    'https://ryanadsportal.vercel.app',
-    'http://localhost:3000'
-  ],
+  origin: '*',
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-advertiser-id'],
-  credentials: true
+  credentials: tfalse
 }));
 app.use(express.json());
 
