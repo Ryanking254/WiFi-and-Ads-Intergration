@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE = 'https://adsprojectbackend-dbubw96u9-sam4ryan12-4381s-projects.vercel.app/';
+const API_BASE = 'https://adsprojectbackend-6a96nwhp5-sam4ryan12-4381s-projects.vercel.app/';
 
 const api = axios.create({
   baseURL: API_BASE,

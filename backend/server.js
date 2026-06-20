@@ -22,6 +22,11 @@ app.use(express.json());
 
 // Simulated auth middleware (for demo - replace with real JWT in production)
 const authMiddleware = (req, res, next) => {
+ // Skip auth check for preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
   const advertiserId = req.headers["x-advertiser-id"];
   if (!advertiserId) {
     return res.status(401).json({ error: "Missing advertiser ID" });
