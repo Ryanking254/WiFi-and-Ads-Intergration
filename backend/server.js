@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import Database from "better-sqlite3";
+import { Database } from "node:sqlite";
 import { v4 as uuid } from "uuid";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import path from "path";
@@ -18,10 +18,13 @@ const db = new Database(path.join(__dirname, "data/dsp.db"));
 
 // Middleware
 app.use(cors({
-  origin: '*',
+  origin: [
+    'https://ryanadsportal.vercel.app',
+    'http://localhost:3000'
+  ],
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-advertiser-id'],
-  credentials: false
+  credentials: true
 }));
 app.use(express.json());
 
