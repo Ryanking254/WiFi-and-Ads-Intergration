@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { Database } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { v4 as uuid } from "uuid";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import path from "path";
