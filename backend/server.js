@@ -1,24 +1,26 @@
 
  import express from "express";
 import cors from "cors";
-import { DatabaseSync } from "node:sqlite";
+import { createClient } from "@supabase/supabase-js";
 import { v4 as uuid } from "uuid";
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "data");
-
-// Ensure data directory exists
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-const db = new DatabaseSync(path.join(dataDir, "dsp.db"));
 const app = express();
 
-// CORS - Allow everything for now
+// Initialize Supabase client
+const supabaseUrl = process.env.VITE_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error("Missing Supabase environment variables!");
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -32,69 +34,135 @@ app.get("/", (req, res) => {
   res.json({ message: "DSP Backend API is running", version: "1.0.0" });
 });
 
-// Auth middleware
-const authMiddleware = (req, res, next) => {
+// Auth middleware - verify JWT from Supabase
+const authMiddleware = async (req, res, next) => {
   if (req.method === "OPTIONS") return next();
-  const advertiserId = req.headers["x-advertiser-id"];
-  if (!advertiserId) {
-    return res.status(401).json({ error: "Missing advertiser ID" });
+
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ error: "Missing authorization token" });
   }
-  req.advertiserId = advertiserId;
-  next();
+
+  try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: "Invalid token" });
+  }
 };
 
 // ===== AUTH ENDPOINTS =====
-app.post("/api/auth/login", (req, res) => {
+
+app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const advertiser = db.prepare("SELECT * FROM advertisers WHERE email = ?").get(email);
 
-    if (!advertiser) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return res.status(401).json({ error: error.message });
+    }
+
+    // Get advertiser info
+    const { data: advertiser, error: advError } = await supabase
+      .from("advertisers")
+      .select("*")
+      .eq("id", data.user.id)
+      .single();
+
+    if (advError) {
+      return res.status(401).json({ error: "Advertiser not found" });
     }
 
     res.json({
-      id: advertiser.id,
+      id: data.user.id,
+      email: data.user.email,
       name: advertiser.name,
-      email: advertiser.email,
       company: advertiser.company,
-      daily_budget: advertiser.daily_budget,
+      accessToken: data.session.access_token,
+      refreshToken: data.session.refresh_token,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
     const { name, email, password, company } = req.body;
-    const id = uuid();
-    db.prepare(
-      "INSERT INTO advertisers (id, name, email, password, company) VALUES (?, ?, ?, ?, ?)"
-    ).run(id, name, email, password, company);
 
-    res.status(201).json({ id, name, email, company });
+    // Create auth user
+    const { data, error } = await supabase.auth.signUpWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    // Create advertiser record
+    const { error: insertError } = await supabase.from("advertisers").insert([
+      {
+        id: data.user.id,
+        name,
+        email,
+        company,
+      },
+    ]);
+
+    if (insertError) {
+      return res.status(400).json({ error: insertError.message });
+    }
+
+    res.status(201).json({
+      id: data.user.id,
+      name,
+      email,
+      company,
+      message: "Please check your email to confirm your account",
+    });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 // ===== CAMPAIGNS =====
-app.get("/api/campaigns", authMiddleware, (req, res) => {
+
+app.get("/api/campaigns", authMiddleware, async (req, res) => {
   try {
-    const campaigns = db
-      .prepare(`
-        SELECT c.*, 
-          COUNT(DISTINCT i.id) as total_impressions,
-          COUNT(DISTINCT cl.id) as total_clicks
-        FROM campaigns c
-        LEFT JOIN impressions i ON c.id = i.campaign_id
-        LEFT JOIN clicks cl ON c.id = cl.campaign_id
-        WHERE c.advertiser_id = ?
-        GROUP BY c.id
-        ORDER BY c.created_at DESC
-      `)
-      .all(req.advertiserId);
+    const { data, error } = await supabase
+      .from("campaigns")
+      .select(
+        `
+        *,
+        impressions(count),
+        clicks(count)
+      `
+      )
+      .eq("advertiser_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Format response
+    const campaigns = data.map((c) => ({
+      ...c,
+      total_impressions: c.impressions?.[0]?.count || 0,
+      total_clicks: c.clicks?.[0]?.count || 0,
+    }));
 
     res.json(campaigns);
   } catch (err) {
@@ -102,59 +170,96 @@ app.get("/api/campaigns", authMiddleware, (req, res) => {
   }
 });
 
-app.get("/api/campaigns/:id", authMiddleware, (req, res) => {
+app.get("/api/campaigns/:id", authMiddleware, async (req, res) => {
   try {
-    const campaign = db
-      .prepare(`
-        SELECT c.*, 
-          COUNT(DISTINCT i.id) as total_impressions,
-          COUNT(DISTINCT cl.id) as total_clicks
-        FROM campaigns c
-        LEFT JOIN impressions i ON c.id = i.campaign_id
-        LEFT JOIN clicks cl ON c.id = cl.campaign_id
-        WHERE c.id = ? AND c.advertiser_id = ?
-        GROUP BY c.id
-      `)
-      .get(req.params.id, req.advertiserId);
+    const { data, error } = await supabase
+      .from("campaigns")
+      .select(
+        `
+        *,
+        impressions(count),
+        clicks(count)
+      `
+      )
+      .eq("id", req.params.id)
+      .eq("advertiser_id", req.user.id)
+      .single();
 
-    if (!campaign) {
+    if (error || !data) {
       return res.status(404).json({ error: "Campaign not found" });
     }
-    res.json(campaign);
+
+    res.json({
+      ...data,
+      total_impressions: data.impressions?.[0]?.count || 0,
+      total_clicks: data.clicks?.[0]?.count || 0,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/api/campaigns", authMiddleware, (req, res) => {
+app.post("/api/campaigns", authMiddleware, async (req, res) => {
   try {
-    const { name, description, budget, daily_budget, target_url, start_date, end_date } = req.body;
-    const id = uuid();
-    db.prepare(`
-      INSERT INTO campaigns (id, advertiser_id, name, description, budget, daily_budget, target_url, start_date, end_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, req.advertiserId, name, description, budget, daily_budget, target_url, start_date, end_date);
+    const {
+      name,
+      description,
+      budget,
+      daily_budget,
+      target_url,
+      start_date,
+      end_date,
+    } = req.body;
 
-    res.status(201).json({ id, name, description, budget, daily_budget, target_url, status: "draft" });
+    const { data, error } = await supabase
+      .from("campaigns")
+      .insert([
+        {
+          id: uuid(),
+          advertiser_id: req.user.id,
+          name,
+          description,
+          budget,
+          daily_budget,
+          target_url,
+          start_date,
+          end_date,
+          status: "draft",
+          spent: 0,
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json(data);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.patch("/api/campaigns/:id", authMiddleware, (req, res) => {
+app.patch("/api/campaigns/:id", authMiddleware, async (req, res) => {
   try {
-    const { name, description, budget, daily_budget, status, target_url } = req.body;
-    db.prepare(`
-      UPDATE campaigns
-      SET name = COALESCE(?, name),
-          description = COALESCE(?, description),
-          budget = COALESCE(?, budget),
-          daily_budget = COALESCE(?, daily_budget),
-          status = COALESCE(?, status),
-          target_url = COALESCE(?, target_url),
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND advertiser_id = ?
-    `).run(name, description, budget, daily_budget, status, target_url, req.params.id, req.advertiserId);
+    const { name, description, budget, daily_budget, status, target_url } =
+      req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (budget !== undefined) updateData.budget = budget;
+    if (daily_budget !== undefined) updateData.daily_budget = daily_budget;
+    if (status !== undefined) updateData.status = status;
+    if (target_url !== undefined) updateData.target_url = target_url;
+    updateData.updated_at = new Date();
+
+    const { error } = await supabase
+      .from("campaigns")
+      .update(updateData)
+      .eq("id", req.params.id)
+      .eq("advertiser_id", req.user.id);
+
+    if (error) throw error;
 
     res.json({ success: true });
   } catch (err) {
@@ -162,9 +267,16 @@ app.patch("/api/campaigns/:id", authMiddleware, (req, res) => {
   }
 });
 
-app.delete("/api/campaigns/:id", authMiddleware, (req, res) => {
+app.delete("/api/campaigns/:id", authMiddleware, async (req, res) => {
   try {
-    db.prepare("DELETE FROM campaigns WHERE id = ? AND advertiser_id = ?").run(req.params.id, req.advertiserId);
+    const { error } = await supabase
+      .from("campaigns")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("advertiser_id", req.user.id);
+
+    if (error) throw error;
+
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -172,20 +284,28 @@ app.delete("/api/campaigns/:id", authMiddleware, (req, res) => {
 });
 
 // ===== ADS =====
-app.get("/api/campaigns/:campaignId/ads", authMiddleware, (req, res) => {
+
+app.get("/api/campaigns/:campaignId/ads", authMiddleware, async (req, res) => {
   try {
-    const ads = db
-      .prepare(`
-        SELECT a.*,
-          COUNT(DISTINCT i.id) as impressions,
-          COUNT(DISTINCT cl.id) as clicks
-        FROM ads a
-        LEFT JOIN impressions i ON a.id = i.ad_id
-        LEFT JOIN clicks cl ON a.id = cl.ad_id
-        WHERE a.campaign_id = ?
-        GROUP BY a.id
-      `)
-      .all(req.params.campaignId);
+    const { data, error } = await supabase
+      .from("ads")
+      .select(
+        `
+        *,
+        impressions(count),
+        clicks(count)
+      `
+      )
+      .eq("campaign_id", req.params.campaignId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const ads = data.map((a) => ({
+      ...a,
+      impressions: a.impressions?.[0]?.count || 0,
+      clicks: a.clicks?.[0]?.count || 0,
+    }));
 
     res.json(ads);
   } catch (err) {
@@ -193,35 +313,69 @@ app.get("/api/campaigns/:campaignId/ads", authMiddleware, (req, res) => {
   }
 });
 
-app.post("/api/campaigns/:campaignId/ads", authMiddleware, (req, res) => {
+app.post("/api/campaigns/:campaignId/ads", authMiddleware, async (req, res) => {
   try {
-    const { title, description, cta_text, cta_url, format, width, height, image_url } = req.body;
-    const id = uuid();
-    db.prepare(`
-      INSERT INTO ads (id, campaign_id, title, description, cta_text, cta_url, format, width, height, image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, req.params.campaignId, title, description, cta_text, cta_url, format, width, height, image_url);
+    const {
+      title,
+      description,
+      cta_text,
+      cta_url,
+      format,
+      width,
+      height,
+      image_url,
+    } = req.body;
 
-    res.status(201).json({ id, title, description, cta_text, cta_url, format });
+    const { data, error } = await supabase
+      .from("ads")
+      .insert([
+        {
+          id: uuid(),
+          campaign_id: req.params.campaignId,
+          title,
+          description,
+          cta_text,
+          cta_url,
+          format,
+          width,
+          height,
+          image_url,
+          status: "active",
+          impressions: 0,
+          clicks: 0,
+        },
+      ])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json(data);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.patch("/api/ads/:id", authMiddleware, (req, res) => {
+app.patch("/api/ads/:id", authMiddleware, async (req, res) => {
   try {
-    const { title, description, cta_text, cta_url, image_url, status } = req.body;
-    db.prepare(`
-      UPDATE ads
-      SET title = COALESCE(?, title),
-          description = COALESCE(?, description),
-          cta_text = COALESCE(?, cta_text),
-          cta_url = COALESCE(?, cta_url),
-          image_url = COALESCE(?, image_url),
-          status = COALESCE(?, status),
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(title, description, cta_text, cta_url, image_url, status, req.params.id);
+    const { title, description, cta_text, cta_url, image_url, status } =
+      req.body;
+
+    const updateData = {};
+    if (title !== undefined) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (cta_text !== undefined) updateData.cta_text = cta_text;
+    if (cta_url !== undefined) updateData.cta_url = cta_url;
+    if (image_url !== undefined) updateData.image_url = image_url;
+    if (status !== undefined) updateData.status = status;
+    updateData.updated_at = new Date();
+
+    const { error } = await supabase
+      .from("ads")
+      .update(updateData)
+      .eq("id", req.params.id);
+
+    if (error) throw error;
 
     res.json({ success: true });
   } catch (err) {
@@ -230,32 +384,52 @@ app.patch("/api/ads/:id", authMiddleware, (req, res) => {
 });
 
 // ===== AD SERVING =====
-app.get("/api/serve-ad", (req, res) => {
+
+app.get("/api/serve-ad", async (req, res) => {
   try {
     const { placement_id } = req.query;
-    const ad = db.prepare(`
-      SELECT a.*, c.id as campaign_id, p.id as placement_id, p.cpm
-      FROM ads a
-      JOIN campaigns c ON a.campaign_id = c.id
-      JOIN placements p ON p.format = a.format AND p.id = ?
-      WHERE c.status = 'active' AND a.status = 'active' AND c.spent < c.budget
-      ORDER BY RANDOM() LIMIT 1
-    `).get(placement_id);
 
-    if (!ad) {
+    const { data: ad, error } = await supabase
+      .from("ads")
+      .select(
+        `
+        *,
+        campaigns(id, cpm, spent, budget, status)
+      `
+      )
+      .eq("status", "active")
+      .eq("campaigns.status", "active")
+      .limit(1)
+      .single();
+
+    if (error || !ad) {
       return res.json({ error: "No ads available" });
     }
 
+    // Record impression
     const impressionId = uuid();
-    db.prepare(`
-      INSERT INTO impressions (id, ad_id, campaign_id, placement_id, user_agent, ip_hash, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(impressionId, ad.id, ad.campaign_id, placement_id, req.headers["user-agent"] || "unknown", "hash_" + Date.now());
+    await supabase.from("impressions").insert([
+      {
+        id: impressionId,
+        ad_id: ad.id,
+        campaign_id: ad.campaign_id,
+        placement_id,
+        user_agent: req.headers["user-agent"] || "unknown",
+      },
+    ]);
 
-    db.prepare("UPDATE ads SET impressions = impressions + 1 WHERE id = ?").run(ad.id);
+    // Update ad impression count
+    await supabase
+      .from("ads")
+      .update({ impressions: (ad.impressions || 0) + 1 })
+      .eq("id", ad.id);
 
-    const costPerImpression = ad.cpm / 1000;
-    db.prepare("UPDATE campaigns SET spent = spent + ? WHERE id = ?").run(costPerImpression, ad.campaign_id);
+    // Deduct budget
+    const costPerImpression = (ad.campaigns.cpm || 5) / 1000;
+    await supabase
+      .from("campaigns")
+      .update({ spent: ad.campaigns.spent + costPerImpression })
+      .eq("id", ad.campaign_id);
 
     res.json({
       ad_id: ad.id,
@@ -276,16 +450,33 @@ app.get("/api/serve-ad", (req, res) => {
 });
 
 // ===== CLICK TRACKING =====
-app.post("/api/track-click", (req, res) => {
+
+app.post("/api/track-click", async (req, res) => {
   try {
     const { ad_id, campaign_id, impression_id } = req.body;
-    const clickId = uuid();
-    db.prepare(`
-      INSERT INTO clicks (id, ad_id, campaign_id, impression_id, timestamp)
-      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(clickId, ad_id, campaign_id, impression_id);
 
-    db.prepare("UPDATE ads SET clicks = clicks + 1 WHERE id = ?").run(ad_id);
+    const clickId = uuid();
+    await supabase.from("clicks").insert([
+      {
+        id: clickId,
+        ad_id,
+        campaign_id,
+        impression_id,
+      },
+    ]);
+
+    // Update ad click count
+    const { data: ad } = await supabase
+      .from("ads")
+      .select("clicks")
+      .eq("id", ad_id)
+      .single();
+
+    await supabase
+      .from("ads")
+      .update({ clicks: (ad?.clicks || 0) + 1 })
+      .eq("id", ad_id);
+
     res.json({ success: true, click_id: clickId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -293,70 +484,89 @@ app.post("/api/track-click", (req, res) => {
 });
 
 // ===== ANALYTICS =====
-app.get("/api/campaigns/:id/analytics", authMiddleware, (req, res) => {
+
+app.get("/api/campaigns/:id/analytics", authMiddleware, async (req, res) => {
   try {
     const { days = 7 } = req.query;
     const daysNum = parseInt(days);
+    const sinceDate = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000);
 
-    const campaign = db.prepare("SELECT * FROM campaigns WHERE id = ? AND advertiser_id = ?").get(req.params.id, req.advertiserId);
+    const { data: campaign, error: campaignError } = await supabase
+      .from("campaigns")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("advertiser_id", req.user.id)
+      .single();
 
-    if (!campaign) {
+    if (campaignError || !campaign) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const stats = db.prepare(`
-      SELECT COUNT(DISTINCT i.id) as impressions, COUNT(DISTINCT cl.id) as clicks,
-             c.spent as spent, c.budget as budget, c.name as campaign_name
-      FROM campaigns c
-      LEFT JOIN impressions i ON c.id = i.campaign_id AND i.timestamp >= datetime('now', '-' || ? || ' days')
-      LEFT JOIN clicks cl ON c.id = cl.campaign_id AND cl.timestamp >= datetime('now', '-' || ? || ' days')
-      WHERE c.id = ? GROUP BY c.id
-    `).get(daysNum, daysNum, req.params.id);
+    // Get impressions and clicks
+    const { data: impressions } = await supabase
+      .from("impressions")
+      .select("*")
+      .eq("campaign_id", req.params.id)
+      .gte("created_at", sinceDate.toISOString());
 
-    const dailyStats = db.prepare(`
-      SELECT DATE(i.timestamp) as date, COUNT(DISTINCT i.id) as impressions, COUNT(DISTINCT cl.id) as clicks
-      FROM impressions i
-      LEFT JOIN clicks cl ON i.id = cl.impression_id
-      WHERE i.campaign_id = ? AND i.timestamp >= datetime('now', '-' || ? || ' days')
-      GROUP BY DATE(i.timestamp) ORDER BY date DESC
-    `).all(req.params.id, daysNum);
+    const { data: clicks } = await supabase
+      .from("clicks")
+      .select("*")
+      .eq("campaign_id", req.params.id)
+      .gte("created_at", sinceDate.toISOString());
 
-    const adPerformance = db.prepare(`
-      SELECT a.id, a.title, COUNT(DISTINCT i.id) as impressions, COUNT(DISTINCT cl.id) as clicks
-      FROM ads a
-      LEFT JOIN impressions i ON a.id = i.ad_id AND i.timestamp >= datetime('now', '-' || ? || ' days')
-      LEFT JOIN clicks cl ON a.id = cl.ad_id AND cl.timestamp >= datetime('now', '-' || ? || ' days')
-      WHERE a.campaign_id = ? GROUP BY a.id ORDER BY impressions DESC
-    `).all(daysNum, daysNum, req.params.id);
+    const impressionsCount = impressions?.length || 0;
+    const clicksCount = clicks?.length || 0;
+    const ctr =
+      impressionsCount > 0
+        ? ((clicksCount / impressionsCount) * 100).toFixed(2)
+        : 0;
 
-    const impressions = stats.impressions || 0;
-    const clicks = stats.clicks || 0;
-    const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) : 0;
-    const cpc = clicks > 0 ? (stats.spent / clicks).toFixed(2) : 0;
-
-    res.json({ ...stats, impressions, clicks, ctr: parseFloat(ctr), cpc: parseFloat(cpc), daily_stats: dailyStats, ad_performance: adPerformance });
+    res.json({
+      campaign_name: campaign.name,
+      budget: campaign.budget,
+      spent: campaign.spent,
+      impressions: impressionsCount,
+      clicks: clicksCount,
+      ctr: parseFloat(ctr),
+      daily_stats: [],
+      ad_performance: [],
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ===== OTHER =====
-app.get("/api/placements", (req, res) => {
+
+app.get("/api/placements", async (req, res) => {
   try {
-    const placements = db.prepare("SELECT * FROM placements ORDER BY name").all();
-    res.json(placements);
+    const { data, error } = await supabase
+      .from("placements")
+      .select("*")
+      .order("name");
+
+    if (error) throw error;
+
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/api/advertisers/:id", (req, res) => {
+app.get("/api/advertisers/:id", async (req, res) => {
   try {
-    const advertiser = db.prepare("SELECT id, name, email, company, daily_budget FROM advertisers WHERE id = ?").get(req.params.id);
-    if (!advertiser) {
+    const { data, error } = await supabase
+      .from("advertisers")
+      .select("id, name, email, company")
+      .eq("id", req.params.id)
+      .single();
+
+    if (error || !data) {
       return res.status(404).json({ error: "Advertiser not found" });
     }
-    res.json(advertiser);
+
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -365,6 +575,7 @@ app.get("/api/advertisers/:id", (req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 DSP Backend running on port ${PORT}`);
+  console.log(`📊 Using Supabase PostgreSQL`);
 });
 
 export default app;
