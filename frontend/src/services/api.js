@@ -5,8 +5,8 @@ const API_BASE = 'https://adsportalbackend.vercel.app/api';
 
 // Initialize Supabase client
 const supabase = createClient(
-  import.meta.env.VITE_PUBLIC_SUPABASE_URL,
-  import.meta.env.VITE_PUBLIC_SUPABASE_ANON_KEY
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
 // Create axios instance
