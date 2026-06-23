@@ -65,13 +65,18 @@ const authMiddleware = async (req, res, next) => {
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+     console.log("Login attempt:", email);  // REMOVE THE LINE IF
+
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+    
+    console.log("Supabase response:", { data, error });  // REMOVE THIS LINE IF
 
     if (error) {
+    console.log("Auth error:", error.message);  // REMOVE THIS LINE IF
       return res.status(401).json({ error: error.message });
     }
 
@@ -94,7 +99,8 @@ app.post("/api/auth/login", async (req, res) => {
       accessToken: data.session.access_token,
       refreshToken: data.session.refresh_token,
     });
-  } catch (err) {
+  } catch (err) { 
+    console.log("Catch error:", err.message);  // REMOVE THIS LINE IF
     res.status(500).json({ error: err.message });
   }
 });
