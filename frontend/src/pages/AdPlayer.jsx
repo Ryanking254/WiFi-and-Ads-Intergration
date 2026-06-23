@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { adServingAPI } from '../api';
+import { adServingAPI } from '..services/api';
 
 export default function AdPlayer() {
   const [searchParams] = useSearchParams();
