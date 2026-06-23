@@ -1,54 +1,118 @@
 <!doctype html>
-<html>
+<html lang="en">
     <head>
-        <title>WiFi Access Portal</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Connection Required</title>
+
         <style>
             body {
-                font-family: Arial;
+                margin: 0;
+                font-family: Arial, sans-serif;
+                background: linear-gradient(135deg, #f2f2f2, #e6e6e6);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+            }
+
+            .card {
+                background: white;
+                padding: 30px;
+                width: 90%;
+                max-width: 420px;
+                border-radius: 12px;
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
                 text-align: center;
-                background: #0f172a;
-                color: white;
-                padding-top: 80px;
             }
-            .box {
-                background: #1e293b;
-                padding: 20px;
-                margin: auto;
-                width: 300px;
-                border-radius: 10px;
+
+            h1 {
+                margin-bottom: 10px;
+                font-size: 22px;
             }
-            button {
-                padding: 10px;
-                width: 100%;
-                margin-top: 10px;
-                border: none;
-                border-radius: 6px;
-                background: #22c55e;
+
+            p {
+                color: #555;
+                font-size: 14px;
+                line-height: 1.4;
+            }
+
+            .btn {
+                display: inline-block;
+                margin-top: 20px;
+                padding: 12px 18px;
+                background: #007bff;
                 color: white;
-                font-size: 16px;
+                border-radius: 8px;
+                text-decoration: none;
+                font-weight: bold;
                 cursor: pointer;
+                transition: 0.2s;
+            }
+
+            .btn:hover {
+                background: #0056b3;
+            }
+
+            .status {
+                margin-top: 10px;
+                font-size: 12px;
+                color: #999;
             }
         </style>
+
+        <script>
+            const AD_PORTAL_URL = "https://ryanadsportal.vercel.app";
+
+            function goToPortal() {
+                window.location.href = AD_PORTAL_URL;
+            }
+
+            function checkInternet() {
+                // Basic check
+                if (!navigator.onLine) {
+                    return false;
+                }
+
+                // More reliable check (attempt fetch)
+                return fetch("https://www.google.com/favicon.ic", {
+                    mode: "no-cors",
+                })
+                    .then(() => true)
+                    .catch(() => false);
+            }
+
+            window.onload = async function () {
+                const status = document.getElementById("status");
+
+                status.textContent = "Checking connection...";
+
+                const online = await checkInternet();
+
+                if (online) {
+                    status.textContent = "Internet detected. Redirecting...";
+                    window.location.href = "https://google.com"; // normal route
+                } else {
+                    status.textContent = "No internet detected.";
+                }
+            };
+        </script>
     </head>
 
     <body>
-        <div class="box">
-            <h2>Welcome</h2>
-            <p>Connect to access the internet</p>
+        <div class="card">
+            <h1>No Internet Connection</h1>
 
-            <button onclick="login()">Continue</button>
-            <script src="app.js"></script>
+            <p>
+                Your connection appears to be inactive.<br /><br />
+                To restore free internet access, you may watch sponsored ads.
+            </p>
+
+            <div class="btn" onclick="goToPortal()">
+                🎬 Watch Ads to Get Free Internet
+            </div>
+
+            <div class="status" id="status">Checking connection...</div>
         </div>
-
-        <script>
-            function login() {
-                fetch("http://localhost:5000/authorize", {
-                    method: "POST",
-                }).then(() => {
-                    alert("Access granted!");
-                });
-            }
-        </script>
     </body>
 </html>
