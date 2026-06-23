@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import CampaignDetail from './pages/CampaignDetail';
 import NewCampaign from './pages/NewCampaign';
 import Login from './pages/Login';
+import AdPlayer from './pages/AdPlayer';
 import Navbar from './components/Navbar';
 import './index.css';
 
@@ -36,6 +37,7 @@ export default function App() {
               <Route path="/" element={<Dashboard user={user} />} />
               <Route path="/campaign/new" element={<NewCampaign user={user} />} />
               <Route path="/campaign/:id" element={<CampaignDetail user={user} />} />
+              <Route path="/ad-player" element={<AdPlayer />} />
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>
           </div>
@@ -43,6 +45,7 @@ export default function App() {
       ) : (
         <Routes>
           <Route path="/" element={<Login setUser={setUser} />} />
+          <Route path="/ad-player" element={<AdPlayer />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       )}
